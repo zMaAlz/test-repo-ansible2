@@ -1,0 +1,94 @@
+---
+- name: Install Clickhouse
+  hosts: clickhouse
+  handlers:
+    - name: Start clickhouse service
+      become: true
+      ansible.builtin.service:
+        name: clickhouse-server
+        state: restarted
+  pre_tasks:
+    - name: Save the contents of /etc/os-release
+      command: cat /etc/os-release
+      register: os_release
+    - name: Detect CentOS Servers
+      debug:
+        msg: "Installing clickhouse on CentOS..."
+      when: os_release.stdout.find('CentOS') != -1
+    - block:
+        - name: Get clickhouse distrib (RPM)
+          ansible.builtin.get_url:
+            url: "https://packages.clickhouse.com/rpm/stable/{{ item }}-{{ clickhouse_version }}.noarch.rpm"
+            dest: "./{{ item }}-{{ clickhouse_version }}.rpm"
+          with_items: "{{ clickhouse_packages }}"
+          when: os_release.stdout.find('CentOS') != -1
+      rescue:
+        - name: Get clickhouse distrib (RPM)
+          ansible.builtin.get_url:
+            url: "https://packages.clickhouse.com/rpm/stable/clickhouse-common-static-{{ clickhouse_version }}.x86_64.rpm"
+            dest: "./clickhouse-common-static-{{ clickhouse_version }}.rpm"
+          when: os_release.stdout.find('CentOS') != -1
+      notify: Start clickhouse service
+    - name: Install clickhouse packages (RPM)
+      become: true
+      ansible.builtin.yum:
+        name:
+          - clickhouse-common-static-{{ clickhouse_version }}.rpm
+          - clickhouse-client-{{ clickhouse_version }}.rpm
+          - clickhouse-server-{{ clickhouse_version }}.rpm
+      when: os_release.stdout.find('CentOS') != -1
+    - name: Pause
+      pause:
+        minutes: 1
+  tasks:
+    - block:
+      - name: Create database
+        ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
+        register: create_db
+        failed_when: create_db.rc !=0 and create_db.rc !=82
+        changed_when: create_db.rc ==0
+      rescue:
+      - name: start clickhouse-server
+        become: true
+        ansible.builtin.command: "systemctl start clickhouse-server.service"
+      - name: Create database
+        ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
+        register: create_db
+        failed_when: create_db.rc !=0 and create_db.rc !=82
+        changed_when: create_db.rc ==0
+    - name: Create table logs.alerts
+      ansible.builtin.command: "clickhouse-client -q 'create table logs.alerts (message String) ENGINE = TinyLog();' "
+      register: create_table
+      failed_when: create_table.rc !=0 and create_table.rc !=57
+      changed_when: create_table.rc ==0
+- name: Install vector
+  hosts: clickhouse
+  tasks:
+    - name: Download vector
+      ansible.builtin.get_url:
+        url: "https://packages.timber.io/vector/latest/vector-{{ vector_version }}.x86_64.rpm"
+        dest: "./vector-{{ vector_version }}.x86_64.rpm"
+      when: os_release.stdout.find('CentOS') != -1
+    - name: Install vector
+      become: true
+      ansible.builtin.yum:
+        name:
+          - vector-{{ vector_version }}.x86_64.rpm
+    - name: Create folder config vector
+      become: true
+      ansible.builtin.command: "mkdir /usr/conf"
+      register: folder
+      failed_when: folder.rc !=1 and folder.rc !=0
+    - name: Copy vector config
+      become: true
+      template:
+        src: "templates/vector.toml"
+        dest: "/usr/conf/vector.toml"
+    - name: Change file permissions vector.toml
+      become: true
+      ansible.builtin.file:
+        path: "/usr/conf/vector.toml"
+        state: touch
+        mode: "0765"
+    - name: Testing vector
+      ansible.builtin.shell: "echo 'Hello world!' | vector --config /usr/conf/vector.toml"
