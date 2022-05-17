@@ -3,4 +3,15 @@ clickhouse:
   hosts:
     clickhouse:
       ansible_host: "192.168.1.90"
-      ansible_user: "vagrant"      
+      ansible_user: "vagrant"
+vector:
+  hosts:
+    vector:
+      ansible_host: "192.168.1.126"
+      ansible_user: "vagrant"
+lighthouse:
+  hosts:      
+    lighthouse:
+      ansible_host: "192.168.1.56"
+      ansible_user: "vagrant"
+

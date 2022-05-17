@@ -1,68 +1,14 @@
 ---
-- name: Install Clickhouse
-  hosts: clickhouse
-  handlers:
-    - name: Start clickhouse service
-      become: true
-      ansible.builtin.service:
-        name: clickhouse-server
-        state: restarted
+- name: Install vector
+  hosts: all
   pre_tasks:
     - name: Save the contents of /etc/os-release
       command: cat /etc/os-release
       register: os_release
     - name: Detect CentOS Servers
       debug:
-        msg: "Installing clickhouse on CentOS..."
+        msg: "Installing vector on CentOS..."
       when: os_release.stdout.find('CentOS') != -1
-    - block:
-        - name: Get clickhouse distrib (RPM)
-          ansible.builtin.get_url:
-            url: "https://packages.clickhouse.com/rpm/stable/{{ item }}-{{ clickhouse_version }}.noarch.rpm"
-            dest: "./{{ item }}-{{ clickhouse_version }}.rpm"
-          with_items: "{{ clickhouse_packages }}"
-          when: os_release.stdout.find('CentOS') != -1
-      rescue:
-        - name: Get clickhouse distrib (RPM)
-          ansible.builtin.get_url:
-            url: "https://packages.clickhouse.com/rpm/stable/clickhouse-common-static-{{ clickhouse_version }}.x86_64.rpm"
-            dest: "./clickhouse-common-static-{{ clickhouse_version }}.rpm"
-          when: os_release.stdout.find('CentOS') != -1
-      notify: Start clickhouse service
-    - name: Install clickhouse packages (RPM)
-      become: true
-      ansible.builtin.yum:
-        name:
-          - clickhouse-common-static-{{ clickhouse_version }}.rpm
-          - clickhouse-client-{{ clickhouse_version }}.rpm
-          - clickhouse-server-{{ clickhouse_version }}.rpm
-      when: os_release.stdout.find('CentOS') != -1
-    - name: Pause
-      pause:
-        minutes: 1
-  tasks:
-    - block:
-      - name: Create database
-        ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
-        register: create_db
-        failed_when: create_db.rc !=0 and create_db.rc !=82
-        changed_when: create_db.rc ==0
-      rescue:
-      - name: start clickhouse-server
-        become: true
-        ansible.builtin.command: "systemctl start clickhouse-server.service"
-      - name: Create database
-        ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
-        register: create_db
-        failed_when: create_db.rc !=0 and create_db.rc !=82
-        changed_when: create_db.rc ==0
-    - name: Create table logs.alerts
-      ansible.builtin.command: "clickhouse-client -q 'create table logs.alerts (message String) ENGINE = TinyLog();' "
-      register: create_table
-      failed_when: create_table.rc !=0 and create_table.rc !=57
-      changed_when: create_table.rc ==0
-- name: Install vector
-  hosts: clickhouse
   tasks:
     - name: Download vector
       ansible.builtin.get_url:
@@ -90,5 +36,102 @@
         path: "/usr/conf/vector.toml"
         state: touch
         mode: "0765"
-    - name: Testing vector
+- name: Install Clickhouse
+  hosts: clickhouse
+  handlers:
+    - name: Start clickhouse service
+      become: true
+      ansible.builtin.service:
+        name: clickhouse-server
+        state: restarted
+  pre_tasks:
+    - block:
+        - name: Get clickhouse distrib (RPM)
+          ansible.builtin.get_url:
+            url: "https://packages.clickhouse.com/rpm/stable/{{ item }}-{{ clickhouse_version }}.noarch.rpm"
+            dest: "./{{ item }}-{{ clickhouse_version }}.rpm"
+          with_items: "{{ clickhouse_packages }}"
+          when: os_release.stdout.find('CentOS') != -1
+      rescue:
+        - name: Get clickhouse distrib (RPM)
+          ansible.builtin.get_url:
+            url: "https://packages.clickhouse.com/rpm/stable/clickhouse-common-static-{{ clickhouse_version }}.x86_64.rpm"
+            dest: "./clickhouse-common-static-{{ clickhouse_version }}.rpm"
+          when: os_release.stdout.find('CentOS') != -1
+      notify: Start clickhouse service
+    - name: Install clickhouse packages (RPM)
+      become: true
+      ansible.builtin.yum:
+        name:
+          - clickhouse-common-static-{{ clickhouse_version }}.rpm
+          - clickhouse-client-{{ clickhouse_version }}.rpm
+          - clickhouse-server-{{ clickhouse_version }}.rpm
+      when: os_release.stdout.find('CentOS') != -1
+    - name: Copy clickhouse config
+      become: true
+      template:
+        src: "templates/config.xml"
+        dest: "/etc/clickhouse-server/config.d/config.xml"
+  tasks:
+    - block:
+      - name: Create database
+        ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
+        register: create_db
+        failed_when: create_db.rc !=0 and create_db.rc !=82
+        changed_when: create_db.rc ==0
+      rescue:
+      - name: start clickhouse-server
+        become: true
+        ansible.builtin.command: "systemctl start clickhouse-server.service"
+      - name: Create database
+        ansible.builtin.command: "clickhouse-client -h {{ clickhouse_server }} -q 'create database logs;'"
+        register: create_db
+        failed_when: create_db.rc !=0 and create_db.rc !=82
+        changed_when: create_db.rc ==0
+    - name: Create table logs.alerts
+      ansible.builtin.command: "clickhouse-client -h {{ clickhouse_server }} -q 'create table logs.alerts (message String) ENGINE = TinyLog();' "
+      register: create_table
+      failed_when: create_table.rc !=0 and create_table.rc !=57
+      changed_when: create_table.rc ==0
+- name: Testing vector
+  hosts: all
+  tasks:
+    - name: Send massege in vector
       ansible.builtin.shell: "echo 'Hello world!' | vector --config /usr/conf/vector.toml"
+- name: Install lighthouse
+  hosts: lighthouse
+  handlers:
+    - name: Start nginx
+      become: true
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+  pre_tasks:
+    - name: Download nginx
+      ansible.builtin.get_url:
+        url: "https://nginx.org/packages/centos/7/x86_64/RPMS/nginx-{{ nginx_version }}.el7.ngx.x86_64.rpm"
+        dest: "./nginx-{{ nginx_version }}.el7.ngx.x86_64.rpm"
+    - name: install nginx and git
+      become: true
+      ansible.builtin.yum:
+        name: 
+          - git
+          - nginx-{{ nginx_version }}.el7.ngx.x86_64.rpm
+    - name: copy config nginx
+      become: true
+      template:
+        src: "templates/default.conf"
+        dest: "/etc/nginx/conf.d/default.conf"
+      notify: Start nginx
+    - name: Delete default site
+      become: true
+      ansible.builtin.shell: "rm -rf /usr/share/nginx/html/*"    
+  tasks:
+    - name: Clone of a single branch lighthouse
+      become: true
+      ansible.builtin.git:
+        repo: https://github.com/VKCOM/lighthouse.git
+        dest: /usr/share/nginx/html/
+        single_branch: yes
+        version: master
+      notify: Start nginx

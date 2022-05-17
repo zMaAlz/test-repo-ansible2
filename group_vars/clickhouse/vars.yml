@@ -1,5 +1,5 @@
 ---
-vector_version: "0.21.2-1"
+clickhouse_server: "192.168.1.90"
 clickhouse_version: "22.3.3.44"
 clickhouse_packages:
   - clickhouse-client
